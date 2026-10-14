@@ -42,6 +42,13 @@ NS_ASSUME_NONNULL_BEGIN
  */
 - (TUCCursorAction)actionForGesture:(TUCCursorGesture)gesture;
 
+/**
+ Called exactly once per gesture when a multi-finger swipe was recognized and
+ `actionForGesture:` answered with TUCCursorActionKeyboardShortcut. The delegate
+ is responsible for posting the keyboard shortcut that is mapped to the gesture.
+ */
+- (void)performKeyboardShortcutForGesture:(TUCCursorGesture)gesture;
+
 - (CGFloat)digitizerRotationForLocationID:(uint32_t)locationID;
 
 @end

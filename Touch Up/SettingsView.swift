@@ -72,6 +72,40 @@ struct SettingsView: View {
     }
     
     
+    var swipeShortcutSettings: some View {
+        Group {
+            ForEach(SwipeGesture.threeFingerCases) { gesture in
+                swipePicker(for: gesture)
+            }
+            ForEach(SwipeGesture.fourFingerCases) { gesture in
+                swipePicker(for: gesture)
+            }
+        }
+    }
+
+    private func swipePicker(for gesture: SwipeGesture) -> some View {
+        let selection = Binding<String?> {
+            model.gestureShortcutMappings[gesture.rawValue]
+        } set: { newValue in
+            if let newValue {
+                model.gestureShortcutMappings[gesture.rawValue] = newValue
+            } else {
+                model.gestureShortcutMappings.removeValue(forKey: gesture.rawValue)
+            }
+        }
+
+        return Picker(selection: selection) {
+            Text("Off").tag(String?.none)
+            ForEach(ShortcutPreset.catalog) { preset in
+                Text("\(preset.display)   \(preset.name)")
+                    .tag(Optional(preset.id))
+            }
+        } label: {
+            Text(gesture.title)
+        }
+    }
+
+
     var parameterSettings: some View {
         Group {
             Slider(value: $model.holdDuration, in: 0.0...0.16, step: 0.02){
@@ -167,7 +201,15 @@ struct SettingsView: View {
                 Section("Gestures") {
                     gestureSettings
                 }
-                
+
+                Section {
+                    swipeShortcutSettings
+                } header: {
+                    Text("Multi-Finger Shortcuts")
+                } footer: {
+                    Text("A swipe fires its shortcut once the fingers travel far enough. While the fingers are down, mouse input is suppressed so the gesture cannot move or click the cursor. Set a group to \"Off\" to keep the default cursor behavior for that finger count.")
+                }
+
                 Section("Parameters") {
                     parameterSettings
                 }
@@ -198,7 +240,11 @@ struct SettingsView: View {
                 LegacySection(title: "Gestures") {
                     gestureSettings
                 }
-                
+
+                LegacySection(title: "Multi-Finger Shortcuts") {
+                    swipeShortcutSettings
+                }
+
                 LegacySection(title: "Parameters") {
                     parameterSettings
                 }

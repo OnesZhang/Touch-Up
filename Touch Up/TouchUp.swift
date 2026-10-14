@@ -6,6 +6,7 @@
 //
 
 import AppKit
+import Carbon
 import Combine
 import TouchUpCore
 
@@ -34,6 +35,15 @@ class TouchUp: NSObject, ObservableObject {
     @Published var isClickWindowToFrontEnabled = false
     @Published var isClickOnLiftEnabled = false
     @Published var isExclusiveAccessEnabled: Bool = false
+
+    /// Maps a `SwipeGesture.rawValue` to the id of the `ShortcutPreset` assigned to it.
+    /// Missing keys mean "Off" (no shortcut, default cursor behavior for that finger count).
+    @Published var gestureShortcutMappings: [String: String] = [:] {
+        didSet {
+            saveGestureShortcutMappings()
+            updateSwipeEnableFlags()
+        }
+    }
 
     @Published var areAdditionalDigitizerRotationSettingsVisible = false
 
@@ -134,7 +144,15 @@ extension TouchUp {
             "isClickWindowToFrontEnabled" : false,
             "isClickOnLiftEnabled" : false,
             "isExclusiveAccessEnabled" : false,
-            "areAdditionalDigitizerRotationSettingsVisible" : false
+            "areAdditionalDigitizerRotationSettingsVisible" : false,
+
+            // Four-finger swipes mirror the classic macOS trackpad shortcuts by default.
+            "gestureShortcutMappings" : [
+                SwipeGesture.fourUp.rawValue: "ctrl-up",
+                SwipeGesture.fourDown.rawValue: "ctrl-down",
+                SwipeGesture.fourLeft.rawValue: "ctrl-left",
+                SwipeGesture.fourRight.rawValue: "ctrl-right"
+            ]
         ])
         
         holdDuration = defaults.double(forKey: "holdDuration")
@@ -168,6 +186,9 @@ extension TouchUp {
         isClickWindowToFrontEnabled = defaults.bool(forKey: "isClickWindowToFrontEnabled")
         isClickOnLiftEnabled = defaults.bool(forKey: "isClickOnLiftEnabled")
         areAdditionalDigitizerRotationSettingsVisible = defaults.bool(forKey: "areAdditionalDigitizerRotationSettingsVisible")
+
+        gestureShortcutMappings = defaults.dictionary(forKey: "gestureShortcutMappings") as? [String: String] ?? [:]
+        updateSwipeEnableFlags()
     }
     
     
@@ -189,7 +210,33 @@ extension TouchUp {
         defaults.set(isClickOnLiftEnabled, forKey: "isClickOnLiftEnabled")
         defaults.set(areAdditionalDigitizerRotationSettingsVisible, forKey: "areAdditionalDigitizerRotationSettingsVisible")
     }
+}
 
+
+// MARK: - Swipe Shortcut Mappings
+extension TouchUp {
+
+    private func saveGestureShortcutMappings() {
+        UserDefaults.standard.set(gestureShortcutMappings, forKey: "gestureShortcutMappings")
+    }
+
+    /// Tells the driver which finger-count groups currently have at least one shortcut
+    /// assigned. Groups without assignments keep the legacy cursor behavior untouched.
+    private func updateSwipeEnableFlags() {
+        touchManager.threeFingerSwipesEnabled = SwipeGesture.threeFingerCases.contains {
+            gestureShortcutMappings[$0.rawValue] != nil
+        }
+        touchManager.fourFingerSwipesEnabled = SwipeGesture.fourFingerCases.contains {
+            gestureShortcutMappings[$0.rawValue] != nil
+        }
+    }
+
+    func shortcutPreset(for gesture: TUCCursorGesture) -> ShortcutPreset? {
+        guard let swipe = SwipeGesture(coreGesture: gesture),
+              let presetID = gestureShortcutMappings[swipe.rawValue]
+        else { return nil }
+        return ShortcutPreset.catalog.first { $0.id == presetID }
+    }
 }
 
 
@@ -349,10 +396,20 @@ extension TouchUp: TUCTouchDelegate {
             
         case .TUCCursorGesturePinch:
             return isMagnificationEnabled ? .magnify : .none
-            
+
+        case .TUCCursorGestureThreeFingerSwipeUp, .TUCCursorGestureThreeFingerSwipeDown,
+             .TUCCursorGestureThreeFingerSwipeLeft, .TUCCursorGestureThreeFingerSwipeRight,
+             .TUCCursorGestureFourFingerSwipeUp, .TUCCursorGestureFourFingerSwipeDown,
+             .TUCCursorGestureFourFingerSwipeLeft, .TUCCursorGestureFourFingerSwipeRight:
+            return shortcutPreset(for: gesture) != nil ? .keyboardShortcut : .none
+
         default:
             return .none
         }
+    }
+
+    func performKeyboardShortcut(for gesture: TUCCursorGesture) {
+        shortcutPreset(for: gesture)?.post()
     }
     
     
@@ -478,3 +535,217 @@ enum ConnectionState: Int {
 
 
 extension TUCScreen: @retroactive Identifiable {}
+
+
+// MARK: - Swipe Gestures
+
+/// The multi-finger swipes that can each be mapped to one keyboard shortcut.
+enum SwipeGesture: String, CaseIterable, Identifiable {
+    case threeUp, threeDown, threeLeft, threeRight
+    case fourUp, fourDown, fourLeft, fourRight
+
+    var id: String { rawValue }
+
+    static var threeFingerCases: [SwipeGesture] { [.threeUp, .threeDown, .threeLeft, .threeRight] }
+    static var fourFingerCases: [SwipeGesture] { [.fourUp, .fourDown, .fourLeft, .fourRight] }
+
+    init?(coreGesture: TUCCursorGesture) {
+        switch coreGesture {
+        case .TUCCursorGestureThreeFingerSwipeUp:    self = .threeUp
+        case .TUCCursorGestureThreeFingerSwipeDown:  self = .threeDown
+        case .TUCCursorGestureThreeFingerSwipeLeft:  self = .threeLeft
+        case .TUCCursorGestureThreeFingerSwipeRight: self = .threeRight
+        case .TUCCursorGestureFourFingerSwipeUp:     self = .fourUp
+        case .TUCCursorGestureFourFingerSwipeDown:   self = .fourDown
+        case .TUCCursorGestureFourFingerSwipeLeft:   self = .fourLeft
+        case .TUCCursorGestureFourFingerSwipeRight:  self = .fourRight
+        default: return nil
+        }
+    }
+
+    var coreGesture: TUCCursorGesture {
+        switch self {
+        case .threeUp:    return .TUCCursorGestureThreeFingerSwipeUp
+        case .threeDown:  return .TUCCursorGestureThreeFingerSwipeDown
+        case .threeLeft:  return .TUCCursorGestureThreeFingerSwipeLeft
+        case .threeRight: return .TUCCursorGestureThreeFingerSwipeRight
+        case .fourUp:     return .TUCCursorGestureFourFingerSwipeUp
+        case .fourDown:   return .TUCCursorGestureFourFingerSwipeDown
+        case .fourLeft:   return .TUCCursorGestureFourFingerSwipeLeft
+        case .fourRight:  return .TUCCursorGestureFourFingerSwipeRight
+        }
+    }
+
+    var title: String {
+        let fingers = self == .threeUp || self == .threeDown || self == .threeLeft || self == .threeRight ? 3 : 4
+        let direction: String
+        switch self {
+        case .threeUp, .fourUp:    direction = "Up"
+        case .threeDown, .fourDown: direction = "Down"
+        case .threeLeft, .fourLeft: direction = "Left"
+        case .threeRight, .fourRight: direction = "Right"
+        }
+        return "\(fingers)-Finger Swipe \(direction)"
+    }
+}
+
+
+// MARK: - Keyboard Shortcut Presets
+
+/// One selectable entry of the shortcut dropdowns in the settings.
+struct ShortcutPreset: Identifiable {
+
+    enum Kind {
+        case key(keyCode: CGKeyCode, modifiers: CGEventFlags)
+        case mediaKey(Int32)    // NX_KEYTYPE_* value
+    }
+
+    let id: String
+    let name: String
+    let display: String
+    let kind: Kind
+
+    /// Curated list of common macOS shortcuts, grouped by leading comment.
+    static let catalog: [ShortcutPreset] = [
+        // Mission Control & Spaces
+        .init(id: "ctrl-up", name: "Mission Control", display: "⌃↑",
+              kind: .key(keyCode: CGKeyCode(kVK_UpArrow), modifiers: .maskControl)),
+        .init(id: "ctrl-down", name: "Application Windows", display: "⌃↓",
+              kind: .key(keyCode: CGKeyCode(kVK_DownArrow), modifiers: .maskControl)),
+        .init(id: "ctrl-left", name: "Switch Space Left", display: "⌃←",
+              kind: .key(keyCode: CGKeyCode(kVK_LeftArrow), modifiers: .maskControl)),
+        .init(id: "ctrl-right", name: "Switch Space Right", display: "⌃→",
+              kind: .key(keyCode: CGKeyCode(kVK_RightArrow), modifiers: .maskControl)),
+        .init(id: "ctrl-shift-left", name: "Move Window Left a Space", display: "⌃⇧←",
+              kind: .key(keyCode: CGKeyCode(kVK_LeftArrow), modifiers: [.maskControl, .maskShift])),
+        .init(id: "ctrl-shift-right", name: "Move Window Right a Space", display: "⌃⇧→",
+              kind: .key(keyCode: CGKeyCode(kVK_RightArrow), modifiers: [.maskControl, .maskShift])),
+        .init(id: "f4", name: "Launchpad", display: "F4",
+              kind: .key(keyCode: CGKeyCode(kVK_F4), modifiers: [])),
+        .init(id: "f11", name: "Show Desktop", display: "F11",
+              kind: .key(keyCode: CGKeyCode(kVK_F11), modifiers: [])),
+
+        // Windows & Applications
+        .init(id: "cmd-w", name: "Close Window", display: "⌘W",
+              kind: .key(keyCode: CGKeyCode(kVK_ANSI_W), modifiers: .maskCommand)),
+        .init(id: "cmd-m", name: "Minimize Window", display: "⌘M",
+              kind: .key(keyCode: CGKeyCode(kVK_ANSI_M), modifiers: .maskCommand)),
+        .init(id: "cmd-q", name: "Quit Application", display: "⌘Q",
+              kind: .key(keyCode: CGKeyCode(kVK_ANSI_Q), modifiers: .maskCommand)),
+        .init(id: "cmd-tab", name: "Next Application", display: "⌘⇥",
+              kind: .key(keyCode: CGKeyCode(kVK_Tab), modifiers: .maskCommand)),
+        .init(id: "cmd-shift-tab", name: "Previous Application", display: "⌘⇧⇥",
+              kind: .key(keyCode: CGKeyCode(kVK_Tab), modifiers: [.maskCommand, .maskShift])),
+        .init(id: "cmd-grave", name: "Cycle Windows of Application", display: "⌘`",
+              kind: .key(keyCode: CGKeyCode(kVK_ANSI_Grave), modifiers: .maskCommand)),
+        .init(id: "cmd-t", name: "New Tab", display: "⌘T",
+              kind: .key(keyCode: CGKeyCode(kVK_ANSI_T), modifiers: .maskCommand)),
+        .init(id: "cmd-r", name: "Reload", display: "⌘R",
+              kind: .key(keyCode: CGKeyCode(kVK_ANSI_R), modifiers: .maskCommand)),
+        .init(id: "cmd-h", name: "Hide Application", display: "⌘H",
+              kind: .key(keyCode: CGKeyCode(kVK_ANSI_H), modifiers: .maskCommand)),
+        .init(id: "alt-cmd-h", name: "Hide Other Applications", display: "⌥⌘H",
+              kind: .key(keyCode: CGKeyCode(kVK_ANSI_H), modifiers: [.maskCommand, .maskAlternate])),
+
+        // Navigation & Scrolling
+        .init(id: "page-up", name: "Page Up", display: "⇞",
+              kind: .key(keyCode: CGKeyCode(kVK_PageUp), modifiers: [])),
+        .init(id: "page-down", name: "Page Down", display: "⇟",
+              kind: .key(keyCode: CGKeyCode(kVK_PageDown), modifiers: [])),
+        .init(id: "home", name: "Beginning of Page / Document", display: "↖",
+              kind: .key(keyCode: CGKeyCode(kVK_Home), modifiers: [])),
+        .init(id: "end", name: "End of Page / Document", display: "↘",
+              kind: .key(keyCode: CGKeyCode(kVK_End), modifiers: [])),
+        .init(id: "alt-left", name: "Move Word Left", display: "⌥←",
+              kind: .key(keyCode: CGKeyCode(kVK_LeftArrow), modifiers: .maskAlternate)),
+        .init(id: "alt-right", name: "Move Word Right", display: "⌥→",
+              kind: .key(keyCode: CGKeyCode(kVK_RightArrow), modifiers: .maskAlternate)),
+        .init(id: "cmd-left", name: "Move to Line Start", display: "⌘←",
+              kind: .key(keyCode: CGKeyCode(kVK_LeftArrow), modifiers: .maskCommand)),
+        .init(id: "cmd-right", name: "Move to Line End", display: "⌘→",
+              kind: .key(keyCode: CGKeyCode(kVK_RightArrow), modifiers: .maskCommand)),
+        .init(id: "cmd-up", name: "Move to Document Start", display: "⌘↑",
+              kind: .key(keyCode: CGKeyCode(kVK_UpArrow), modifiers: .maskCommand)),
+        .init(id: "cmd-down", name: "Move to Document End", display: "⌘↓",
+              kind: .key(keyCode: CGKeyCode(kVK_DownArrow), modifiers: .maskCommand)),
+
+        // Editing
+        .init(id: "cmd-c", name: "Copy", display: "⌘C",
+              kind: .key(keyCode: CGKeyCode(kVK_ANSI_C), modifiers: .maskCommand)),
+        .init(id: "cmd-v", name: "Paste", display: "⌘V",
+              kind: .key(keyCode: CGKeyCode(kVK_ANSI_V), modifiers: .maskCommand)),
+        .init(id: "cmd-x", name: "Cut", display: "⌘X",
+              kind: .key(keyCode: CGKeyCode(kVK_ANSI_X), modifiers: .maskCommand)),
+        .init(id: "cmd-z", name: "Undo", display: "⌘Z",
+              kind: .key(keyCode: CGKeyCode(kVK_ANSI_Z), modifiers: .maskCommand)),
+        .init(id: "cmd-shift-z", name: "Redo", display: "⌘⇧Z",
+              kind: .key(keyCode: CGKeyCode(kVK_ANSI_Z), modifiers: [.maskCommand, .maskShift])),
+        .init(id: "cmd-a", name: "Select All", display: "⌘A",
+              kind: .key(keyCode: CGKeyCode(kVK_ANSI_A), modifiers: .maskCommand)),
+
+        // System
+        .init(id: "cmd-space", name: "Spotlight Search", display: "⌘Space",
+              kind: .key(keyCode: CGKeyCode(kVK_Space), modifiers: .maskCommand)),
+        .init(id: "ctrl-cmd-q", name: "Lock Screen", display: "⌃⌘Q",
+              kind: .key(keyCode: CGKeyCode(kVK_ANSI_Q), modifiers: [.maskControl, .maskCommand])),
+        .init(id: "cmd-shift-3", name: "Screenshot: Entire Screen", display: "⌘⇧3",
+              kind: .key(keyCode: CGKeyCode(kVK_ANSI_3), modifiers: [.maskCommand, .maskShift])),
+        .init(id: "cmd-shift-4", name: "Screenshot: Selected Area", display: "⌘⇧4",
+              kind: .key(keyCode: CGKeyCode(kVK_ANSI_4), modifiers: [.maskCommand, .maskShift])),
+        .init(id: "cmd-shift-5", name: "Screenshot: Screenshot Toolbar", display: "⌘⇧5",
+              kind: .key(keyCode: CGKeyCode(kVK_ANSI_5), modifiers: [.maskCommand, .maskShift])),
+
+        // Media & Display
+        .init(id: "volume-up", name: "Volume Up", display: "🔊+", kind: .mediaKey(0)),
+        .init(id: "volume-down", name: "Volume Down", display: "🔊−", kind: .mediaKey(1)),
+        .init(id: "mute", name: "Mute", display: "🔇", kind: .mediaKey(7)),
+        .init(id: "brightness-up", name: "Brightness Up", display: "☀+", kind: .mediaKey(2)),
+        .init(id: "brightness-down", name: "Brightness Down", display: "☀−", kind: .mediaKey(3)),
+        .init(id: "play-pause", name: "Play / Pause", display: "⏯",
+              kind: .mediaKey(16)),   // NX_KEYTYPE_PLAY
+        .init(id: "next-track", name: "Next Track", display: "⏭",
+              kind: .mediaKey(17)),   // NX_KEYTYPE_NEXT
+        .init(id: "previous-track", name: "Previous Track", display: "⏮",
+              kind: .mediaKey(18))    // NX_KEYTYPE_PREVIOUS
+    ]
+
+    /// Posts the shortcut as a real keystroke (requires Accessibility access).
+    func post() {
+        switch kind {
+        case .key(let keyCode, let modifiers):
+            let source = CGEventSource(stateID: .hidSystemState)
+
+            let keyDown = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true)
+            keyDown?.flags = modifiers
+            keyDown?.post(tap: .cghidEventTap)
+
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.02) {
+                let keyUp = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
+                keyUp?.flags = modifiers
+                keyUp?.post(tap: .cghidEventTap)
+            }
+
+        case .mediaKey(let type):
+            Self.postMediaKey(type, down: true)
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.02) {
+                Self.postMediaKey(type, down: false)
+            }
+        }
+    }
+
+    /// Media keys (volume, brightness, playback) travel as NSEvents of subtype 8,
+    /// whose data1 packs the NX_KEYTYPE id plus a down/up flag.
+    private static func postMediaKey(_ type: Int32, down: Bool) {
+        let data1 = Int((type << 16) | ((down ? 0x0A : 0x0B) << 8))
+        let event = NSEvent.otherEvent(with: .systemDefined,
+                                       location: .zero,
+                                       modifierFlags: [],
+                                       timestamp: ProcessInfo.processInfo.systemUptime,
+                                       windowNumber: 0,
+                                       context: nil,
+                                       subtype: 8,
+                                       data1: data1,
+                                       data2: -1)
+        event?.cgEvent?.post(tap: .cghidEventTap)
+    }
+}

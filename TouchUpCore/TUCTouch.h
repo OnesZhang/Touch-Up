@@ -19,7 +19,17 @@ typedef NS_OPTIONS(NSUInteger, TUCCursorGesture) {
     TUCCursorGestureHoldAndDrag     = 1 << 5,
     TUCCursorGestureTapSecondFinger = 1 << 6,
     TUCCursorGestureTwoFingerDrag   = 1 << 7,
-    TUCCursorGesturePinch           = 1 << 8  // internal: pinch cannot be remapped
+    TUCCursorGesturePinch           = 1 << 8,  // internal: pinch cannot be remapped
+
+    TUCCursorGestureThreeFingerSwipeUp    = 1 << 9,
+    TUCCursorGestureThreeFingerSwipeDown  = 1 << 10,
+    TUCCursorGestureThreeFingerSwipeLeft  = 1 << 11,
+    TUCCursorGestureThreeFingerSwipeRight = 1 << 12,
+
+    TUCCursorGestureFourFingerSwipeUp     = 1 << 13,
+    TUCCursorGestureFourFingerSwipeDown   = 1 << 14,
+    TUCCursorGestureFourFingerSwipeLeft   = 1 << 15,
+    TUCCursorGestureFourFingerSwipeRight  = 1 << 16
 };
 
 
@@ -32,7 +42,8 @@ typedef NS_ENUM(NSUInteger, TUCCursorAction) {
     TUCCursorActionClick,
     TUCCursorActionSecondaryClick,
     TUCCursorActionScroll,
-    TUCCursorActionMagnify
+    TUCCursorActionMagnify,
+    TUCCursorActionKeyboardShortcut   // asks the delegate to post a keyboard shortcut via performKeyboardShortcutForGesture:
 };
 
 
