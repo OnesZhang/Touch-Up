@@ -33,6 +33,28 @@ struct SettingsView: View {
         }
     }
     
+    var inputMonitoringBanner: some View {
+        Group {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Input Monitoring Required")
+                    .font(.headline)
+                Text("macOS requires Input Monitoring permission to read the touchscreen. Click Grant Access, enable Touch Up in the list that opens, then relaunch the app.")
+                    .foregroundColor(.secondary)
+                    .font(.caption)
+            }
+
+            HStack {
+                Spacer()
+                Button {
+                    model.requestInputMonitoringAccess()
+                } label: {
+                    Text("Grant Access")
+                }
+                .buttonStyle(BorderedProminentButtonStyle())
+            }
+        }
+    }
+
     var top: some View {
         Toggle(model.uiLabels(for: \.isPublishingMouseEventsEnabled).title, isOn: $model.isPublishingMouseEventsEnabled)
     }
@@ -189,7 +211,13 @@ struct SettingsView: View {
                     }
 
                 }
-                
+
+                if !model.isInputMonitoringGranted {
+                    Section {
+                        inputMonitoringBanner
+                    }
+                }
+
                 Section {
                     top
                 }
@@ -229,6 +257,18 @@ struct SettingsView: View {
 
         } else {
             return List {
+                if !model.isAccessibilityAccessGranted {
+                    LegacySection {
+                        welcomeBanner
+                    }
+                }
+
+                if !model.isInputMonitoringGranted {
+                    LegacySection {
+                        inputMonitoringBanner
+                    }
+                }
+
                 LegacySection {
                     top
                 }

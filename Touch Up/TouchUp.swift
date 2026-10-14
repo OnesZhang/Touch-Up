@@ -8,6 +8,7 @@
 import AppKit
 import Carbon
 import Combine
+import IOKit
 import TouchUpCore
 
 class TouchUp: NSObject, ObservableObject {
@@ -66,6 +67,10 @@ class TouchUp: NSObject, ObservableObject {
 
     @Published var isAccessibilityAccessGranted = false
 
+    /// macOS requires Input Monitoring (TCC "listen event") access to read HID touchscreens.
+    /// Without it, device registration fails — the driver stays dormant instead of crashing.
+    @Published var isInputMonitoringGranted = false
+
 
     @objc func screenParametersDidChange() {
         // identify which screen is newly added.
@@ -91,11 +96,29 @@ class TouchUp: NSObject, ObservableObject {
         let checkOptPrompt = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as NSString
         self.isAccessibilityAccessGranted = AXIsProcessTrustedWithOptions([checkOptPrompt: true] as CFDictionary?)
     }
-    
+
+    func checkInputMonitoringAccess() {
+        isInputMonitoringGranted = IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeGranted
+    }
+
+    func requestInputMonitoringAccess() {
+        IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
+        checkInputMonitoringAccess()
+        // The system prompt can be easy to miss; open the settings pane as well.
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
     func grantAccessibilityAccess() {
         self.touchManager.triggerSystemAccessibilityAccessAlert()
         (NSApp.delegate as? AppDelegate)?.settingsWindow.close()
         self.isAccessibilityAccessGranted = true
+    }
+
+    @objc func refreshPermissionState() {
+        checkAccessibilityAccessGranted()
+        checkInputMonitoringAccess()
     }
     
     
@@ -110,10 +133,12 @@ class TouchUp: NSObject, ObservableObject {
         self.touchManager.delegate = self
         
         NotificationCenter.default.addObserver(self, selector: #selector(TouchUp.screenParametersDidChange), name: NSApplication.didChangeScreenParametersNotification, object: nil)
-        
+        NotificationCenter.default.addObserver(self, selector: #selector(TouchUp.refreshPermissionState), name: NSApplication.didBecomeActiveNotification, object: nil)
+
         initPreferences()
-        
+
         checkAccessibilityAccessGranted()
+        checkInputMonitoringAccess()
     }
     
     
