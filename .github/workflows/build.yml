@@ -10,6 +10,8 @@ jobs:
   build:
     name: Build Touch Up.app
     runs-on: macos-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout
@@ -40,5 +42,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Touch-Up.app
-          path: Touch-Up.app.zip
+          path: build/Release/Touch Up.app
           if-no-files-found: error
+
+      - name: Attach to rolling CI release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create ci-build --target "$GITHUB_SHA" \
+            --title "CI build" --notes "Automated build from $GITHUB_SHA" 2>/dev/null || true
+          gh release upload ci-build Touch-Up.app.zip --clobber

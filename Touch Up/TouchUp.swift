@@ -740,14 +740,42 @@ struct ShortcutPreset: Identifiable {
         case .key(let keyCode, let modifiers):
             let source = CGEventSource(stateID: .hidSystemState)
 
+            // Modifier key codes, used to synthesize real modifier press/release events.
+            // System-wide shortcuts (Mission Control, Spaces) ignore synthetic events that
+            // only carry the flag bit without the accompanying modifier key events.
+            var modifierKeyCodes: [CGKeyCode] = []
+            if modifiers.contains(.maskControl)  { modifierKeyCodes.append(CGKeyCode(kVK_Control)) }
+            if modifiers.contains(.maskShift)    { modifierKeyCodes.append(CGKeyCode(kVK_Shift)) }
+            if modifiers.contains(.maskAlternate){ modifierKeyCodes.append(CGKeyCode(kVK_Option)) }
+            if modifiers.contains(.maskCommand)  { modifierKeyCodes.append(CGKeyCode(kVK_Command)) }
+
+            // Real arrow keys arrive with the numericPad flag; Mission Control and
+            // Spaces discard arrow-key shortcuts posted without it.
+            var flags = modifiers
+            switch keyCode {
+            case CGKeyCode(kVK_LeftArrow), CGKeyCode(kVK_RightArrow),
+                 CGKeyCode(kVK_UpArrow), CGKeyCode(kVK_DownArrow):
+                flags.insert(.maskNumericPad)
+            default:
+                break
+            }
+
+            for key in modifierKeyCodes {
+                CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: true)?.post(tap: .cghidEventTap)
+            }
+
             let keyDown = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true)
-            keyDown?.flags = modifiers
+            keyDown?.flags = flags
             keyDown?.post(tap: .cghidEventTap)
 
             DispatchQueue.global().asyncAfter(deadline: .now() + 0.02) {
                 let keyUp = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
-                keyUp?.flags = modifiers
+                keyUp?.flags = flags
                 keyUp?.post(tap: .cghidEventTap)
+
+                for key in modifierKeyCodes.reversed() {
+                    CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false)?.post(tap: .cghidEventTap)
+                }
             }
 
         case .mediaKey(let type):
