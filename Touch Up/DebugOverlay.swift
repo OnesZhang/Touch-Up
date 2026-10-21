@@ -89,10 +89,21 @@ class DebugOverlay: NSWindow {
 final class TouchIndicatorOverlay {
 
     private let model: TouchUp
-    private var windows: [NSNumber: NSWindow] = [:]   // keyed by NSScreen number
-    private var views: [NSNumber: TouchIndicatorView] = [:]
+    private var window: NSWindow?
+    private var indicatorView: TouchIndicatorView?
+    private var unionFrame: NSRect = .zero
     private var observers = [AnyCancellable]()
     private var cursorHidden = false
+
+    /// Temporary file logger for triage; unified-log entries were not visible.
+    private func tlog(_ message: String) {
+        let line = "\(Date()) [TI] \(message)\n"
+        guard let data = line.data(using: .utf8),
+              let handle = FileHandle(forWritingAtPath: "/tmp/ti.log") else { return }
+        handle.seekToEndOfFile()
+        handle.write(data)
+        handle.closeFile()
+    }
 
     init(model: TouchUp) {
         self.model = model
@@ -113,54 +124,35 @@ final class TouchIndicatorOverlay {
         guard model.isTouchIndicatorEnabled else {
             hideAll()
             setCursorHidden(false)
-            NSLog("[TI] refresh: off, active=%d", activeCount)
+            tlog("refresh: off, active=\(activeCount)")
             return
         }
 
-        rebuildWindowsIfNeeded()
+        ensureWindow()
 
-        // Group active touches by screen (CG global coords → AppKit coords, y-up).
-        var markersByScreen = [NSNumber: [String: CGPoint]]()
+        // One window spans every screen, so no per-display placement can fail.
+        // CG global coords (y-down) → AppKit coords (y-up) → window-local.
+        var markers = [String: CGPoint]()
+        let mainTop = NSScreen.screens.first.map { NSMaxY($0.frame) } ?? 0
         for touch in model.touches where touch.isActive() {
             let cgPoint = model.touchManager.convertScreenPointRelative(toAbsolute: touch.location,
                                                                        locationID: touch.locationID)
-            let nsPoint = CGPoint(x: cgPoint.x, y: (NSScreen.screens.first.map { NSMaxY($0.frame) } ?? 0) - cgPoint.y)
-
-            // Prefer the screen the digitizer is mapped to (handles mirroring and
-            // multi-display arrangements by construction); fall back to a geometric hit test.
-            let screen = model.touchscreen(forLocationID: touch.locationID)?.systemScreen()
-                ?? NSScreen.screens.first(where: { NSMouseInRect(nsPoint, $0.frame, false) })
-
-            guard let screen else {
-                NSLog("[TI] MISS cg=(%.1f,%.1f) ns=(%.1f,%.1f) locID=%u", cgPoint.x, cgPoint.y, nsPoint.x, nsPoint.y, touch.locationID)
-                continue
-            }
-
-            let key = screenNumber(of: screen)
-            let local = CGPoint(x: nsPoint.x - screen.frame.origin.x,
-                                y: nsPoint.y - screen.frame.origin.y)
-            markersByScreen[key, default: [:]][touch.uuid.uuidString] = local
-            NSLog("[TI] mark cg=(%.1f,%.1f) screen=%@ local=(%.1f,%.1f)",
-                  cgPoint.x, cgPoint.y, screen.localizedName ?? "?", local.x, local.y)
+            let nsPoint = CGPoint(x: cgPoint.x, y: mainTop - cgPoint.y)
+            let local = CGPoint(x: nsPoint.x - unionFrame.origin.x,
+                                y: nsPoint.y - unionFrame.origin.y)
+            markers[touch.uuid.uuidString] = local
+            tlog("mark cg=(\(cgPoint.x),\(cgPoint.y)) ns=(\(nsPoint.x),\(nsPoint.y)) local=(\(local.x),\(local.y)) locID=\(touch.locationID)")
         }
 
-        let totalMarkers = markersByScreen.values.reduce(0) { $0 + $1.count }
-        NSLog("[TI] refresh: active=%d markers=%d screens=%d windows=%d cursorHidden=%d",
-              activeCount, totalMarkers, NSScreen.screens.count, windows.count, cursorHidden ? 1 : 0)
+        tlog("refresh: active=\(activeCount) markers=\(markers.count) union=\(unionFrame) cursorHidden=\(cursorHidden)")
 
-        // Update each window; screens with no touches still get a pass so lifted
-        // fingers fade out where they were last seen.
-        for (key, view) in views {
-            view.apply(markers: markersByScreen[key] ?? [:])
-            if let window = windows[key] {
-                window.orderFrontRegardless()
-            }
-        }
+        indicatorView?.apply(markers: markers)
+        window?.orderFrontRegardless()
 
         // While a finger is on the screen the pointer itself would jump around under
         // the touch circle — hide it so recordings only show the indicator. (The
         // pointer still moves so clicks land at the touch position; it just isn't drawn.)
-        setCursorHidden(!markersByScreen.isEmpty)
+        setCursorHidden(!markers.isEmpty)
     }
 
     /// Balanced NSCursor hide/unhide so the pointer only disappears while a
@@ -174,56 +166,54 @@ final class TouchIndicatorOverlay {
             }
             NSCursor.hide()
             if !cursorHidden {
-                NSLog("[TI] cursor -> hidden")
+                tlog("cursor -> hidden")
             }
             cursorHidden = true
         } else if cursorHidden {
             cursorHidden = false
             NSCursor.unhide()
-            NSLog("[TI] cursor -> visible")
+            tlog("cursor -> visible")
         }
     }
 
-    private func rebuildWindowsIfNeeded() {
-        let currentKeys = Set(NSScreen.screens.map { screenNumber(of: $0) })
-        guard Set(windows.keys) == currentKeys else {
-            hideAll()
-            windows.removeAll()
-            views.removeAll()
-            for screen in NSScreen.screens {
-                let key = screenNumber(of: screen)
-                let window = NSWindow(contentRect: screen.frame,
-                                      styleMask: .borderless,
-                                      backing: .buffered,
-                                      defer: false,
-                                      screen: screen)
-                window.backgroundColor = .clear
-                window.isOpaque = false
-                window.hasShadow = false
-                window.ignoresMouseEvents = true
-                window.level = .screenSaver
-                window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-                window.isReleasedWhenClosed = false
+    /// One borderless window spanning the union of all screens.
+    private func ensureWindow() {
+        var union = NSRect.zero
+        for screen in NSScreen.screens {
+            union = NSUnionRect(union, screen.frame)
+        }
 
-                let view = TouchIndicatorView(frame: CGRect(origin: .zero, size: screen.frame.size))
-                view.autoresizingMask = [.width, .height]
-                window.contentView = view
-
-                windows[key] = window
-                views[key] = view
-            }
-            NSLog("[TI] rebuilt windows: %d (screens=%d)", windows.count, NSScreen.screens.count)
+        if let window, window.frame == union {
             return
         }
-    }
 
-    private func screenNumber(of screen: NSScreen) -> NSNumber {
-        (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber) ?? 0
+        window?.orderOut(nil)
+        unionFrame = union
+
+        let newWindow = NSWindow(contentRect: union,
+                                 styleMask: .borderless,
+                                 backing: .buffered,
+                                 defer: false)
+        newWindow.backgroundColor = .clear
+        newWindow.isOpaque = false
+        newWindow.hasShadow = false
+        newWindow.ignoresMouseEvents = true
+        newWindow.level = .screenSaver
+        newWindow.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        newWindow.isReleasedWhenClosed = false
+
+        let view = TouchIndicatorView(frame: CGRect(origin: .zero, size: union.size))
+        view.autoresizingMask = [.width, .height]
+        newWindow.contentView = view
+
+        window = newWindow
+        indicatorView = view
+        tlog("window rebuilt: \(union)")
     }
 
     private func hideAll() {
-        for (_, view) in views { view.apply(markers: [:]) }
-        for (_, window) in windows { window.orderOut(nil) }
+        indicatorView?.apply(markers: [:])
+        window?.orderOut(nil)
     }
 }
 
