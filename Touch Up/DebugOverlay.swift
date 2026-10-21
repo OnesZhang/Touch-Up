@@ -94,12 +94,16 @@ final class TouchIndicatorOverlay {
     private var unionFrame: NSRect = .zero
     private var observers = [AnyCancellable]()
     private var cursorHidden = false
+    private var reassertTimer: Timer?
 
     /// Temporary file logger for triage; unified-log entries were not visible.
     private func tlog(_ message: String) {
-        let line = "\(Date()) [TI] \(message)\n"
-        guard let data = line.data(using: .utf8),
-              let handle = FileHandle(forWritingAtPath: "/tmp/ti.log") else { return }
+        let path = "/tmp/ti.log"
+        if !FileManager.default.fileExists(atPath: path) {
+            FileManager.default.createFile(atPath: path, contents: nil)
+        }
+        guard let data = "\(Date()) [TI] \(message)\n".data(using: .utf8),
+              let handle = FileHandle(forWritingAtPath: path) else { return }
         handle.seekToEndOfFile()
         handle.write(data)
         handle.closeFile()
@@ -123,6 +127,7 @@ final class TouchIndicatorOverlay {
         let activeCount = model.touches.filter { $0.isActive() }.count
         guard model.isTouchIndicatorEnabled else {
             hideAll()
+            stopCursorReassert()
             setCursorHidden(false)
             tlog("refresh: off, active=\(activeCount)")
             return
@@ -152,7 +157,30 @@ final class TouchIndicatorOverlay {
         // While a finger is on the screen the pointer itself would jump around under
         // the touch circle — hide it so recordings only show the indicator. (The
         // pointer still moves so clicks land at the touch position; it just isn't drawn.)
-        setCursorHidden(!markers.isEmpty)
+        // A warp re-displays the pointer, and touch reports pause while a finger rests,
+        // so a timer keeps re-asserting the hide independent of report traffic.
+        if markers.isEmpty {
+            stopCursorReassert()
+            setCursorHidden(false)
+        } else {
+            setCursorHidden(true)
+            startCursorReassert()
+        }
+    }
+
+    private func startCursorReassert() {
+        guard reassertTimer == nil else { return }
+        let timer = Timer(timeInterval: 0.07, repeats: true) { [weak self] _ in
+            guard let self, self.model.isTouchIndicatorEnabled else { return }
+            self.setCursorHidden(true)
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        reassertTimer = timer
+    }
+
+    private func stopCursorReassert() {
+        reassertTimer?.invalidate()
+        reassertTimer = nil
     }
 
     /// Balanced NSCursor hide/unhide so the pointer only disappears while a
