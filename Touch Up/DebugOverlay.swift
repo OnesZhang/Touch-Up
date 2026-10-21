@@ -109,9 +109,11 @@ final class TouchIndicatorOverlay {
     }
 
     private func refresh() {
+        let activeCount = model.touches.filter { $0.isActive() }.count
         guard model.isTouchIndicatorEnabled else {
             hideAll()
             setCursorHidden(false)
+            NSLog("[TI] refresh: off, active=%d", activeCount)
             return
         }
 
@@ -123,13 +125,28 @@ final class TouchIndicatorOverlay {
             let cgPoint = model.touchManager.convertScreenPointRelative(toAbsolute: touch.location,
                                                                        locationID: touch.locationID)
             let nsPoint = CGPoint(x: cgPoint.x, y: (NSScreen.screens.first.map { NSMaxY($0.frame) } ?? 0) - cgPoint.y)
-            guard let screen = NSScreen.screens.first(where: { NSMouseInRect(nsPoint, $0.frame, false) }) else { continue }
+
+            // Prefer the screen the digitizer is mapped to (handles mirroring and
+            // multi-display arrangements by construction); fall back to a geometric hit test.
+            let screen = model.touchscreen(forLocationID: touch.locationID)?.systemScreen()
+                ?? NSScreen.screens.first(where: { NSMouseInRect(nsPoint, $0.frame, false) })
+
+            guard let screen else {
+                NSLog("[TI] MISS cg=(%.1f,%.1f) ns=(%.1f,%.1f) locID=%u", cgPoint.x, cgPoint.y, nsPoint.x, nsPoint.y, touch.locationID)
+                continue
+            }
 
             let key = screenNumber(of: screen)
             let local = CGPoint(x: nsPoint.x - screen.frame.origin.x,
                                 y: nsPoint.y - screen.frame.origin.y)
             markersByScreen[key, default: [:]][touch.uuid.uuidString] = local
+            NSLog("[TI] mark cg=(%.1f,%.1f) screen=%@ local=(%.1f,%.1f)",
+                  cgPoint.x, cgPoint.y, screen.localizedName ?? "?", local.x, local.y)
         }
+
+        let totalMarkers = markersByScreen.values.reduce(0) { $0 + $1.count }
+        NSLog("[TI] refresh: active=%d markers=%d screens=%d windows=%d cursorHidden=%d",
+              activeCount, totalMarkers, NSScreen.screens.count, windows.count, cursorHidden ? 1 : 0)
 
         // Update each window; screens with no touches still get a pass so lifted
         // fingers fade out where they were last seen.
@@ -147,14 +164,23 @@ final class TouchIndicatorOverlay {
     }
 
     /// Balanced NSCursor hide/unhide so the pointer only disappears while a
-    /// finger is actually on the touchscreen.
+    /// finger is actually on the touchscreen. While a finger is down, the hide
+    /// state is re-asserted on every update: the driver's cursor warps can make
+    /// macOS re-display the pointer mid-drag.
     private func setCursorHidden(_ hidden: Bool) {
-        guard hidden != cursorHidden else { return }
-        cursorHidden = hidden
         if hidden {
+            if cursorHidden {
+                NSCursor.unhide()
+            }
             NSCursor.hide()
-        } else {
+            if !cursorHidden {
+                NSLog("[TI] cursor -> hidden")
+            }
+            cursorHidden = true
+        } else if cursorHidden {
+            cursorHidden = false
             NSCursor.unhide()
+            NSLog("[TI] cursor -> visible")
         }
     }
 
@@ -186,6 +212,7 @@ final class TouchIndicatorOverlay {
                 windows[key] = window
                 views[key] = view
             }
+            NSLog("[TI] rebuilt windows: %d (screens=%d)", windows.count, NSScreen.screens.count)
             return
         }
     }
