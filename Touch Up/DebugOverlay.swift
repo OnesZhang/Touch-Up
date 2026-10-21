@@ -96,19 +96,6 @@ final class TouchIndicatorOverlay {
     private var cursorHidden = false
     private var reassertTimer: Timer?
 
-    /// Temporary file logger for triage; unified-log entries were not visible.
-    private func tlog(_ message: String) {
-        let path = "/tmp/ti.log"
-        if !FileManager.default.fileExists(atPath: path) {
-            FileManager.default.createFile(atPath: path, contents: nil)
-        }
-        guard let data = "\(Date()) [TI] \(message)\n".data(using: .utf8),
-              let handle = FileHandle(forWritingAtPath: path) else { return }
-        handle.seekToEndOfFile()
-        handle.write(data)
-        handle.closeFile()
-    }
-
     init(model: TouchUp) {
         self.model = model
 
@@ -124,12 +111,10 @@ final class TouchIndicatorOverlay {
     }
 
     private func refresh() {
-        let activeCount = model.touches.filter { $0.isActive() }.count
         guard model.isTouchIndicatorEnabled else {
             hideAll()
             stopCursorReassert()
             setCursorHidden(false)
-            tlog("refresh: off, active=\(activeCount)")
             return
         }
 
@@ -146,25 +131,26 @@ final class TouchIndicatorOverlay {
             let local = CGPoint(x: nsPoint.x - unionFrame.origin.x,
                                 y: nsPoint.y - unionFrame.origin.y)
             markers[touch.uuid.uuidString] = local
-            tlog("mark cg=(\(cgPoint.x),\(cgPoint.y)) ns=(\(nsPoint.x),\(nsPoint.y)) local=(\(local.x),\(local.y)) locID=\(touch.locationID)")
         }
-
-        tlog("refresh: active=\(activeCount) markers=\(markers.count) union=\(unionFrame) cursorHidden=\(cursorHidden)")
 
         indicatorView?.apply(markers: markers)
         window?.orderFrontRegardless()
 
-        // While a finger is on the screen the pointer itself would jump around under
-        // the touch circle — hide it so recordings only show the indicator. (The
-        // pointer still moves so clicks land at the touch position; it just isn't drawn.)
-        // A warp re-displays the pointer, and touch reports pause while a finger rests,
-        // so a timer keeps re-asserting the hide independent of report traffic.
-        if markers.isEmpty {
-            stopCursorReassert()
-            setCursorHidden(false)
-        } else {
+        // Hide the pointer while a multi-finger gesture is on the screen — the only
+        // case where hiding actually sticks, because mouse events are suppressed and
+        // the pointer is never repositioned.
+        //
+        // Single-finger hide is intentionally disabled: macOS force-renders the
+        // pointer whenever it is repositioned (NSCursor.hide is ignored during the
+        // driver's cursor moves), so hiding a resting single finger only made the
+        // pointer flicker in and out during taps and drags without ever staying
+        // hidden while it mattered.
+        if markers.count >= 2 {
             setCursorHidden(true)
             startCursorReassert()
+        } else {
+            stopCursorReassert()
+            setCursorHidden(false)
         }
     }
 
@@ -193,14 +179,10 @@ final class TouchIndicatorOverlay {
                 NSCursor.unhide()
             }
             NSCursor.hide()
-            if !cursorHidden {
-                tlog("cursor -> hidden")
-            }
             cursorHidden = true
         } else if cursorHidden {
             cursorHidden = false
             NSCursor.unhide()
-            tlog("cursor -> visible")
         }
     }
 
@@ -236,7 +218,6 @@ final class TouchIndicatorOverlay {
 
         window = newWindow
         indicatorView = view
-        tlog("window rebuilt: \(union)")
     }
 
     private func hideAll() {
