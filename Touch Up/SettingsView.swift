@@ -220,6 +220,9 @@ struct SettingsView: View {
 
                 Section {
                     top
+                    Toggle(isOn: $model.isTouchIndicatorEnabled) {
+                        SettingsExplanationLabel(labels: model.uiLabels(for: \.isTouchIndicatorEnabled))
+                    }
                 }
 
                 Section("Touchscreens") {

@@ -37,6 +37,15 @@ class TouchUp: NSObject, ObservableObject {
     @Published var isClickOnLiftEnabled = false
     @Published var isExclusiveAccessEnabled: Bool = false
 
+    /// Draws a circle at every finger that touches the touchscreen (for recordings
+    /// and presentations). Driven purely by touch data, so mouse clicks never show
+    /// an indicator.
+    @Published var isTouchIndicatorEnabled: Bool = false {
+        didSet {
+            UserDefaults.standard.set(isTouchIndicatorEnabled, forKey: "isTouchIndicatorEnabled")
+        }
+    }
+
     /// Maps a `MultiFingerGesture.rawValue` to the id of the `ShortcutPreset` assigned to it.
     /// Missing keys mean "Off" (no shortcut, default cursor behavior for that finger count).
     @Published var gestureShortcutMappings: [String: String] = [:] {
@@ -170,6 +179,7 @@ extension TouchUp {
             "isClickOnLiftEnabled" : false,
             "isExclusiveAccessEnabled" : false,
             "areAdditionalDigitizerRotationSettingsVisible" : false,
+            "isTouchIndicatorEnabled" : false,
 
             // Swipes mirror the classic macOS trackpad shortcuts; long-presses hold the
             // fn key until the fingers lift. Taps default to off.
@@ -218,6 +228,7 @@ extension TouchUp {
         isClickWindowToFrontEnabled = defaults.bool(forKey: "isClickWindowToFrontEnabled")
         isClickOnLiftEnabled = defaults.bool(forKey: "isClickOnLiftEnabled")
         areAdditionalDigitizerRotationSettingsVisible = defaults.bool(forKey: "areAdditionalDigitizerRotationSettingsVisible")
+        isTouchIndicatorEnabled = defaults.bool(forKey: "isTouchIndicatorEnabled")
 
         gestureShortcutMappings = defaults.dictionary(forKey: "gestureShortcutMappings") as? [String: String] ?? [:]
         updateSwipeEnableFlags()
@@ -534,6 +545,10 @@ extension TouchUp {
         case \.isExclusiveAccessEnabled:
             return("Exclusive Access",
                    "This option should mitigate undesired mouse events created on some devices.")
+
+        case \.isTouchIndicatorEnabled:
+            return("Show Touch Indicators",
+                   "Display a circle at every finger touching the screen and hide the mouse pointer while a finger is down — made for screen recordings and presentations. Mouse input never shows indicators or hides the pointer.")
         
         case \.areAdditionalDigitizerRotationSettingsVisible:
             return("Digitizer Rotation",
